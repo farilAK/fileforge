@@ -2,28 +2,28 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const os = require('os'); // Modul bawaan untuk mendeteksi folder /tmp di Vercel
 const pdfParse = require('pdf-parse');
 const { Document, Packer, Paragraph, TextRun } = require('docx');
 const sharp = require('sharp');
 const { PDFDocument } = require('pdf-lib');
 
-// Modul bawaan Node.js untuk mengeksekusi perintah Python
-const { exec } = require('child_process');
+// Modul bawaan Node.js untuk mengeksekusi perintah
+const { exec, execFile } = require('child_process');
 const util = require('util');
 const execPromise = util.promisify(exec);
-
-// LibreOffice untuk konversi Word ke PDF
-const { execFile } = require('child_process');
 const execFilePromise = util.promisify(execFile);
+
 const SOFFICE = process.env.SOFFICE_PATH ||
   (process.platform === 'win32' ? 'C:\\Program Files\\LibreOffice\\program\\soffice.exe' : 'soffice');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Buat folder uploads dan output secara otomatis jika belum ada
-const uploadDir = path.join(__dirname, 'uploads');
-const outputDir = path.join(__dirname, 'output');
+// PERBAIKAN VERCEL: Gunakan folder /tmp (os.tmpdir()) yang diizinkan untuk Write file
+const uploadDir = path.join(os.tmpdir(), 'uploads');
+const outputDir = path.join(os.tmpdir(), 'output');
+
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
@@ -41,12 +41,12 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB max
 });
 
-// Serve static files
+// Serve static files (ini tetap dari direktori asal karena hanya Read-Only)
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
 // ============================================
-// ROUTE: Word to PDF (Menggunakan LibreOffice agar layout sama seperti Word)
+// ROUTE: Word to PDF (Menggunakan LibreOffice)
 // ============================================
 app.post('/api/word-to-pdf', upload.single('file'), async (req, res) => {
   let profileDir = null;
@@ -64,7 +64,6 @@ app.post('/api/word-to-pdf', upload.single('file'), async (req, res) => {
 
     const pdfFileName = path.basename(req.file.originalname, ext) + '.pdf';
 
-    // Profil LibreOffice terpisah per proses supaya aman jika ada beberapa konversi bersamaan
     profileDir = path.join(outputDir, 'lo-profile-' + Date.now() + '-' + Math.round(Math.random() * 1e9));
     const p = profileDir.replace(/\\/g, '/');
     const profileUrl = p.startsWith('/') ? 'file://' + p : 'file:///' + p;
@@ -94,7 +93,7 @@ app.post('/api/word-to-pdf', upload.single('file'), async (req, res) => {
     if (req.file) try { fs.unlinkSync(req.file.path); } catch (e) { }
     if (generatedPdf) try { fs.unlinkSync(generatedPdf); } catch (e) { }
     if (profileDir) try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch (e) { }
-    res.status(500).json({ error: 'Gagal mengkonversi file. Pastikan LibreOffice sudah terinstall.' });
+    res.status(500).json({ error: 'Gagal mengkonversi file.' });
   }
 });
 
@@ -117,7 +116,6 @@ app.post('/api/pdf-to-word', upload.single('file'), async (req, res) => {
     const docxPath = path.join(outputDir, Date.now() + '-' + docxFileName);
     const pdfPath = req.file.path;
 
-    // Menjalankan skrip Python pdf2docx secara otomatis dari Node.js
     const pythonCommand = `python -c "from pdf2docx import Converter; cv = Converter(r'${pdfPath}'); cv.convert(r'${docxPath}'); cv.close()"`;
 
     await execPromise(pythonCommand);
@@ -130,7 +128,7 @@ app.post('/api/pdf-to-word', upload.single('file'), async (req, res) => {
   } catch (error) {
     console.error('PDF to Word error:', error);
     if (req.file) try { fs.unlinkSync(req.file.path); } catch (e) { }
-    res.status(500).json({ error: 'Gagal mengkonversi file. Pastikan Python dan pdf2docx sudah terinstall.' });
+    res.status(500).json({ error: 'Gagal mengkonversi file.' });
   }
 });
 
@@ -188,9 +186,8 @@ app.post('/api/compress', upload.single('file'), async (req, res) => {
       const compressedPdfBytes = await pdfDoc.save({ useObjectStreams: true });
       fs.writeFileSync(outputPath, compressedPdfBytes);
     } 
-    // ---- OTHER FILES: ZIP compression (Menggunakan bawaan zlib agar kompatibel dengan Vercel) ----
     else {
-      outputFileName = baseName + '_compressed.gz'; // Diganti dari zip ke gz (gzip) yang didukung native
+      outputFileName = baseName + '_compressed.gz'; 
       outputPath = path.join(outputDir, Date.now() + '-' + outputFileName);
 
       const { createGzip } = require('zlib');
@@ -224,15 +221,14 @@ app.post('/api/compress', upload.single('file'), async (req, res) => {
   } catch (error) {
     console.error('Compress error:', error);
     if (req.file) try { fs.unlinkSync(req.file.path); } catch (e) { }
-    res.status(500).json({ error: 'Gagal mengkompresi file. Silakan coba lagi.' });
+    res.status(500).json({ error: 'Gagal mengkompresi file.' });
   }
 });
 
-// Cleanup old files every 30 minutes
+// Cleanup old files
 setInterval(() => {
-  const dirs = ['uploads', 'output'];
-  dirs.forEach(dir => {
-    const dirPath = path.join(__dirname, dir);
+  const dirs = [uploadDir, outputDir];
+  dirs.forEach(dirPath => {
     if (fs.existsSync(dirPath)) {
       fs.readdirSync(dirPath).forEach(file => {
         const filePath = path.join(dirPath, file);
