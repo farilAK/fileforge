@@ -4,7 +4,6 @@ const path = require('path');
 const fs = require('fs');
 const pdfParse = require('pdf-parse');
 const { Document, Packer, Paragraph, TextRun } = require('docx');
-const archiver = require('archiver');
 const sharp = require('sharp');
 const { PDFDocument } = require('pdf-lib');
 
@@ -188,18 +187,24 @@ app.post('/api/compress', upload.single('file'), async (req, res) => {
 
       const compressedPdfBytes = await pdfDoc.save({ useObjectStreams: true });
       fs.writeFileSync(outputPath, compressedPdfBytes);
-    } else {
-      outputFileName = baseName + '_compressed.zip';
+    } 
+    // ---- OTHER FILES: ZIP compression (Menggunakan bawaan zlib agar kompatibel dengan Vercel) ----
+    else {
+      outputFileName = baseName + '_compressed.gz'; // Diganti dari zip ke gz (gzip) yang didukung native
       outputPath = path.join(outputDir, Date.now() + '-' + outputFileName);
 
+      const { createGzip } = require('zlib');
+      const { pipeline } = require('stream');
+      
       await new Promise((resolve, reject) => {
-        const output = fs.createWriteStream(outputPath);
-        const archive = archiver('zip', { zlib: { level: 9 } });
-        output.on('close', resolve);
-        archive.on('error', reject);
-        archive.pipe(output);
-        archive.file(req.file.path, { name: req.file.originalname });
-        archive.finalize();
+        const gzip = createGzip({ level: 9 });
+        const source = fs.createReadStream(req.file.path);
+        const destination = fs.createWriteStream(outputPath);
+
+        pipeline(source, gzip, destination, (err) => {
+          if (err) reject(err);
+          else resolve();
+        });
       });
     }
 

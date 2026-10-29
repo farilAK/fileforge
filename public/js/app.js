@@ -349,7 +349,7 @@ async function processFile() {
       const baseName = selectedFile.name.replace(/\.[^/.]+$/, '');
       if (currentTool === 'word-to-pdf') downloadFileName = baseName + '.pdf';
       else if (currentTool === 'pdf-to-word') downloadFileName = baseName + '.docx';
-      else downloadFileName = baseName + '_compressed.zip';
+      else downloadFileName = baseName + '_compressed.gz';
     }
 
     const url = window.URL.createObjectURL(blob);
